@@ -1,4 +1,8 @@
 {
+
+  "prisma": {
+  "seed": "ts-node prisma/seed.ts"
+ },
   "name": "signal-room-mvp",
   "version": "0.1.0",
   "private": true,
@@ -10,13 +14,16 @@
   },
   "dependencies": {
     "@prisma/client": "^6.19.2",
+    "bcryptjs": "^3.0.3",
     "next": "16.1.6",
+    "next-auth": "^4.24.13",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^20.19.30",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "babel-plugin-react-compiler": "1.0.0",
@@ -24,6 +31,7 @@
     "eslint-config-next": "16.1.6",
     "prisma": "^6.19.2",
     "tailwindcss": "^4",
+    "ts-node": "^10.9.2",
     "typescript": "^5"
   }
 }
