@@ -1,0 +1,154 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  CLIENT
+}
+
+enum Side {
+  BUY
+  SELL
+}
+
+enum TradeStatus {
+  OPEN
+  CLOSED
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  role      Role     @default(CLIENT)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts  ClientAccount[]
+}
+
+model ClientAccount {
+  id              String   @id @default(cuid())
+  userId          String
+  name            String   @default("Main")
+  startingBalance Float
+  currentEquity   Float
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user         User        @relation(fields: [userId], references: [id])
+  riskProfile  RiskProfile?
+  presences    Presence[]
+  deliveries   SignalDelivery[]
+  trades       Trade[]
+}
+
+model RiskProfile {
+  id          String   @id @default(cuid())
+  accountId   String   @unique
+  riskPercent Float    @default(1.0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  account ClientAccount @relation(fields: [accountId], references: [id])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  name      String
+  timezone  String
+  startTime String
+  endTime   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  signals   Signal[]
+  presences Presence[]
+}
+
+model Presence {
+  id          String   @id @default(cuid())
+  sessionId   String
+  accountId   String
+  joinedAt    DateTime @default(now())
+  leftAt      DateTime?
+  lastSeenAt  DateTime @default(now())
+
+  session Session       @relation(fields: [sessionId], references: [id])
+  account ClientAccount @relation(fields: [accountId], references: [id])
+
+  @@index([sessionId, lastSeenAt])
+}
+
+model Signal {
+  id         String   @id @default(cuid())
+  sessionId  String
+  symbol     String
+  side       Side
+  timeframe  String
+  signalTime DateTime
+  sl         Float
+  tp         Float
+  createdBy  String
+  createdAt  DateTime @default(now())
+
+  session    Session  @relation(fields: [sessionId], references: [id])
+  deliveries SignalDelivery[]
+  trades     Trade[]
+}
+
+model SignalDelivery {
+  id          String   @id @default(cuid())
+  signalId    String
+  accountId   String
+  deliveredAt DateTime @default(now())
+  viewedAt    DateTime?
+
+  signal   Signal        @relation(fields: [signalId], references: [id])
+  account  ClientAccount @relation(fields: [accountId], references: [id])
+
+  @@unique([signalId, accountId])
+}
+
+model Trade {
+  id         String      @id @default(cuid())
+  accountId  String
+  signalId   String
+  status     TradeStatus @default(OPEN)
+
+  entryTime  DateTime
+  entryPrice Float
+  sl         Float
+  tp         Float
+  lotSize    Float
+
+  exitTime   DateTime?
+  exitPrice  Float?
+  pnlR       Float?
+  pnlMoney   Float?
+
+  createdAt  DateTime @default(now())
+
+  account ClientAccount @relation(fields: [accountId], references: [id])
+  signal  Signal        @relation(fields: [signalId], references: [id])
+}
+
+model Candle {
+  id        String   @id @default(cuid())
+  symbol    String
+  timeframe String
+  time      DateTime
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  volume    Float?
+
+  @@unique([symbol, timeframe, time])
+}
