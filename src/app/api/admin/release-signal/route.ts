@@ -2,13 +2,15 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/auth";
 import { prisma } from "@/lib/db";
+import { pusherServer } from "@/lib/pusher-server";
 
 const PRESENCE_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  if ((session.user as any).role !== "ADMIN") return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if ((session.user as any).role !== "ADMIN")
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
   const body = await req.json();
 
@@ -22,12 +24,14 @@ export async function POST(req: Request) {
     tp: number;
   };
 
-  if (!sessionId || !symbol || !side || !timeframe || !signalTime || !sl || !tp) {
+  if (!sessionId || !symbol || !side || !timeframe || !signalTime || sl === undefined || tp === undefined) {
     return NextResponse.json({ error: "missing fields" }, { status: 400 });
   }
 
   const st = new Date(signalTime);
-  if (isNaN(st.getTime())) return NextResponse.json({ error: "signalTime must be ISO date string" }, { status: 400 });
+  if (isNaN(st.getTime())) {
+    return NextResponse.json({ error: "signalTime must be ISO date string" }, { status: 400 });
+  }
 
   // 1) Create Signal
   const signal = await prisma.signal.create({
@@ -52,12 +56,12 @@ export async function POST(req: Request) {
       leftAt: null,
       lastSeenAt: { gte: cutoff },
     },
-    include: { account: { include: { riskProfile: true } } },
+    include: {
+      account: { include: { riskProfile: true } },
+    },
   });
 
-  // 3) For each active client: create delivery + trade
-  // For MVP: entryPrice = 0 if candle not found yet (we’ll fix with CSV next)
-  // But better: try to find candle open (requires candle data loaded).
+  // 3) Get candle for entry price
   const candle = await prisma.candle.findUnique({
     where: {
       symbol_timeframe_time: {
@@ -77,6 +81,7 @@ export async function POST(req: Request) {
 
   const entryPrice = candle.open;
 
+  // 4) Create deliveries + trades
   let tradesCreated = 0;
 
   for (const p of activePresences) {
@@ -85,9 +90,7 @@ export async function POST(req: Request) {
     const riskPercent = acc.riskProfile?.riskPercent ?? 1.0;
     const equity = acc.currentEquity;
 
-    // SUPER simple sizing for MVP (placeholder):
-    // lotSize = riskAmount / (abs(entry-sl) * 10000)
-    // We'll refine later per instrument.
+    // MVP sizing placeholder
     const riskAmount = (equity * riskPercent) / 100.0;
     const stopDistance = Math.abs(entryPrice - sl);
     const lotSize = stopDistance > 0 ? riskAmount / (stopDistance * 10000) : 0.01;
@@ -111,6 +114,28 @@ export async function POST(req: Request) {
     });
 
     tradesCreated += 1;
+  }
+
+  // ✅ 5) Trigger realtime event BEFORE returning
+  try {
+    await pusherServer.trigger(`session-${sessionId}`, "signal-released", {
+      signalId: signal.id,
+      sessionId,
+      symbol,
+      side,
+      timeframe,
+      signalTime: st.toISOString(),
+      sl,
+      tp,
+      entryPrice,
+      activeClients: activePresences.length,
+      tradesCreated,
+    });
+
+    console.log("✅ Pusher triggered:", `session-${sessionId}`, signal.id);
+  } catch (e) {
+    console.error("❌ Pusher trigger failed:", e);
+    // For MVP we still return success because DB work succeeded
   }
 
   return NextResponse.json({
