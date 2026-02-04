@@ -128,6 +128,9 @@ model Trade {
   tp         Float
   lotSize    Float
 
+  equityAtEntry Float?
+  riskAmount    Float?
+
   exitTime   DateTime?
   exitPrice  Float?
   pnlR       Float?
@@ -137,6 +140,8 @@ model Trade {
 
   account ClientAccount @relation(fields: [accountId], references: [id])
   signal  Signal        @relation(fields: [signalId], references: [id])
+
+  @@unique([signalId, accountId])
 }
 
 model Candle {

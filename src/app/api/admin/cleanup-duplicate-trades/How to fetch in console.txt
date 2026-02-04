@@ -1,0 +1,1 @@
+fetch("/api/admin/cleanup-duplicate-trades", { method: "POST" }).then(r=>r.json()).then(console.log)
