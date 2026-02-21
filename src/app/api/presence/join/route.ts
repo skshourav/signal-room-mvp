@@ -12,12 +12,30 @@ export async function POST(req: Request) {
 
   if (!sessionId) return NextResponse.json({ error: "sessionId required" }, { status: 400 });
 
-  // Get client account (MVP: first account)
-  const account = await prisma.clientAccount.findFirst({
-    where: { userId: (session.user as any).id },
+  // Use selected account
+  const user = await prisma.user.findUnique({
+    where: { id: (session.user as any).id },
+    select: { activeAccountId: true },
   });
 
-  if (!account) return NextResponse.json({ error: "no client account" }, { status: 400 });
+  if (!user?.activeAccountId) {
+    return NextResponse.json({ error: "no active account selected" }, { status: 400 });
+  }
+
+  const account = await prisma.clientAccount.findUnique({
+    where: { id: user.activeAccountId },
+  });
+
+  if (!account) {
+    return NextResponse.json({ error: "account not found" }, { status: 400 });
+  }
+
+  if (account.challengeStatus !== "ACTIVE") {
+    return NextResponse.json(
+      { error: `account ${account.challengeStatus.toLowerCase()}` },
+      { status: 403 }
+    );
+  }
 
   // Close any previous open presence for this account in this session (safety)
   await prisma.presence.updateMany({

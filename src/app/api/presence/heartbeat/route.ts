@@ -12,6 +12,26 @@ export async function POST(req: Request) {
 
   if (!presenceId) return NextResponse.json({ error: "presenceId required" }, { status: 400 });
 
+  const presence = await prisma.presence.findUnique({
+    where: { id: presenceId },
+    include: {
+      account: true,
+    },
+  });
+
+  if (!presence) {
+    return NextResponse.json({ error: "presence not found" }, { status: 404 });
+  }
+
+  if (presence.account.challengeStatus !== "ACTIVE") {
+    await prisma.presence.update({
+      where: { id: presenceId },
+      data: { leftAt: new Date() },
+    });
+
+    return NextResponse.json({ error: "account not active" }, { status: 403 });
+  }
+
   await prisma.presence.update({
     where: { id: presenceId },
     data: { lastSeenAt: new Date() },

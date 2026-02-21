@@ -31,7 +31,13 @@ async function main() {
         name: "Main",
         startingBalance: 10000,
         currentEquity: 10000,
+
+        phase1TargetPct: 8,
+        phase2TargetPct: 5,
+        maxLossPct: 10,
+
         riskProfile: { create: { riskPercent: 1.0 } },
+
       },
     });
   }

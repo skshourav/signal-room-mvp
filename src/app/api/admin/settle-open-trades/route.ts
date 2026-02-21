@@ -107,9 +107,10 @@ export async function POST() {
     const riskAmount = trade.riskAmount ?? 0;
     const pnlMoney = r * riskAmount;
 
-    // Transaction: close trade + update equity
-    await prisma.$transaction([
-      prisma.trade.update({
+    // Transaction: close trade + update equity + enforce challenge phase/status
+    await prisma.$transaction(async (tx) => {
+      // 1) Close trade
+      await tx.trade.update({
         where: { id: trade.id },
         data: {
           status: "CLOSED",
@@ -118,14 +119,88 @@ export async function POST() {
           pnlR: r,
           pnlMoney,
         },
-      }),
-      prisma.clientAccount.update({
+      });
+
+      // 2) Increment equity
+      await tx.clientAccount.update({
         where: { id: trade.accountId },
         data: {
-          currentEquity: { increment: pnlMoney }
+          currentEquity: { increment: pnlMoney },
         },
-      }),
-    ]);
+      });
+
+      // 3) Read latest account state (inside same tx)
+      const acc = await tx.clientAccount.findUnique({
+        where: { id: trade.accountId },
+        select: {
+          id: true,
+          startingBalance: true,
+          currentEquity: true,
+          challengeStatus: true,
+          challengePhase: true,
+          phase1TargetPct: true,
+          phase2TargetPct: true,
+          maxLossPct: true,
+          phase2StartEquity: true,
+          phase2StartedAt: true,
+          pausedAt: true,
+          passedAt: true,
+        },
+      });
+
+      if (!acc) return;
+
+      // Profit/loss % are based on original starting balance (as agreed)
+      const profitPct = ((acc.currentEquity - acc.startingBalance) / acc.startingBalance) * 100;
+      const lossPct = ((acc.startingBalance - acc.currentEquity) / acc.startingBalance) * 100;
+
+      const now = new Date();
+
+      // A) Max loss rule (PAUSE). Applies always.
+      if (acc.challengeStatus === "ACTIVE" && lossPct >= acc.maxLossPct) {
+        await tx.clientAccount.update({
+          where: { id: acc.id },
+          data: {
+            challengeStatus: "PAUSED",
+            pausedAt: now,
+          },
+        });
+        return; // once paused, do not transition phases
+      }
+
+      // B) Phase 1 -> Phase 2 (auto)
+      if (
+        acc.challengeStatus === "ACTIVE" &&
+        acc.challengePhase === "PHASE1" &&
+        profitPct >= acc.phase1TargetPct
+      ) {
+        await tx.clientAccount.update({
+          where: { id: acc.id },
+          data: {
+            challengePhase: "PHASE2",
+            phase2StartedAt: now,
+            // snapshot equity at phase-2 start for UI progress display
+            phase2StartEquity: acc.phase2StartEquity ?? acc.currentEquity,
+          },
+        });
+        // continue; (phase 2 pass check can happen later on next settlement)
+      }
+
+      // C) Phase 2 -> PASSED (auto)
+      if (
+        acc.challengeStatus === "ACTIVE" &&
+        acc.challengePhase === "PHASE2" &&
+        profitPct >= acc.phase2TargetPct
+      ) {
+        await tx.clientAccount.update({
+          where: { id: acc.id },
+          data: {
+            challengeStatus: "PASSED",
+            passedAt: now,
+          },
+        });
+      }
+    });
 
     closed += 1;
   }

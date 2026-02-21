@@ -78,7 +78,12 @@ export async function POST(req: Request) {
       lastSeenAt: { gte: cutoff },
     },
     include: {
-      account: { include: { riskProfile: true } },
+      account: {
+        include: {
+          riskProfile: true,
+          user: { select: { id: true } },
+        },
+      },
     },
     orderBy: { lastSeenAt: "desc" }, // newest first helps pick freshest presence when deduping
   });
@@ -90,17 +95,40 @@ export async function POST(req: Request) {
   }
   const uniquePresences = Array.from(uniqueByAccount.values());
 
+  // Build userId -> activeAccountId map
+  const userIds = Array.from(
+    new Set(uniquePresences.map((p) => p.account.user.id))
+  );
+
+  const users = await prisma.user.findMany({
+    where: { id: { in: userIds } },
+    select: { id: true, activeAccountId: true },
+  });
+
+  const activeByUser = new Map(users.map((u) => [u.id, u.activeAccountId]));
+
+  // Keep only presences that match the user's selected account AND account is ACTIVE
+  const eligiblePresences = uniquePresences.filter((p) => {
+    const activeAccountId = activeByUser.get(p.account.user.id);
+    if (!activeAccountId) return false; // no selection -> do not take signals
+    if (p.accountId !== activeAccountId) return false; // not selected
+    return p.account.challengeStatus === "ACTIVE";
+  });
   // 5) Create deliveries + trades (idempotent per account)
   let tradesCreated = 0;
+  let phase1Count = 0;
+  let phase2Count = 0;
 
-  for (const p of uniquePresences) {
+  for (const p of eligiblePresences) {
     const acc = p.account;
 
-    const riskPercent = acc.riskProfile?.riskPercent ?? 1.0;
+    if (p.account.challengePhase === "PHASE1") phase1Count += 1;
+    if (p.account.challengePhase === "PHASE2") phase2Count += 1;
+
     const equity = acc.currentEquity;
 
-    // MVP sizing placeholder
-    const riskAmount = (equity * riskPercent) / 100.0;
+    // Always 1% of starting balance (your core rule)
+    const riskAmount = acc.startingBalance * 0.01;
     const stopDistance = Math.abs(entryPrice - sl);
     const lotSize = stopDistance > 0 ? riskAmount / (stopDistance * 10000) : 0.01;
 
@@ -168,6 +196,9 @@ export async function POST(req: Request) {
       sl,
       tp,
       entryPrice,
+      phase1Count,
+      phase2Count,
+      eligibleClients: eligiblePresences.length,
       activeClients: uniquePresences.length,
       tradesCreated,
     });
@@ -178,6 +209,9 @@ export async function POST(req: Request) {
   return NextResponse.json({
     ok: true,
     signalId: signal.id,
+    phase1Count,
+    phase2Count,
+    eligibleClients: eligiblePresences.length,
     activeClients: uniquePresences.length,
     tradesCreated,
   });

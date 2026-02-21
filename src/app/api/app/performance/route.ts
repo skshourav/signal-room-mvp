@@ -35,11 +35,62 @@ export async function GET() {
 
   const userId = (session.user as any).id;
 
-  const account = await prisma.clientAccount.findFirst({
-    where: { userId },
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { activeAccountId: true },
   });
 
+  const accountId = user?.activeAccountId;
+
+  const accountSelect = {
+    id: true,
+    userId: true,
+    name: true,
+    startingBalance: true,
+    currentEquity: true,
+
+    challengeStatus: true,
+    challengePhase: true,
+    phase1TargetPct: true,
+    phase2TargetPct: true,
+    maxLossPct: true,
+    phase2StartedAt: true,
+    phase2StartEquity: true,
+  } as const;
+
+  // If no active account selected yet, fall back to first account (safe MVP behavior)
+  const account = accountId
+    ? await prisma.clientAccount.findUnique({ where: { id: accountId }, select: accountSelect })
+    : await prisma.clientAccount.findFirst({ where: { userId }, select: accountSelect });
+
   if (!account) return NextResponse.json({ error: "no account" }, { status: 400 });
+
+  const starting = account.startingBalance;
+  const equity = account.currentEquity;
+
+  const overallProfitPct = ((equity - starting) / starting) * 100;
+  const overallLossPct = ((starting - equity) / starting) * 100;
+
+  // Phase 2 display-only profit since phase 2 started
+  const phase2ProfitPct =
+    account.challengePhase === "PHASE2" && account.phase2StartEquity != null
+      ? ((equity - account.phase2StartEquity) / starting) * 100
+      : null;
+
+  // Phase 1 passed badge (green vibe)
+  const phase1Passed = overallProfitPct >= account.phase1TargetPct;
+
+  // Current target depends on phase (for UI progress bars)
+  const currentTargetPct =
+    account.challengePhase === "PHASE1"
+      ? account.phase1TargetPct
+      : account.phase2TargetPct;
+
+  const targetProgressPct =
+    currentTargetPct > 0 ? Math.max(0, Math.min(100, (overallProfitPct / currentTargetPct) * 100)) : 0;
+
+  const drawdownUsedPct =
+    account.maxLossPct > 0 ? Math.max(0, Math.min(100, (overallLossPct / account.maxLossPct) * 100)) : 0;
 
   const closedTrades = await prisma.trade.findMany({
     where: { accountId: account.id, status: "CLOSED" },
@@ -134,6 +185,21 @@ export async function GET() {
       profitFactor: safePF(profitFactor),
       avgR: safe(avgR),
       tradesClosed: closedTrades.length,
+    },
+    challenge: {
+      status: account.challengeStatus,
+      phase: account.challengePhase,
+      phase1TargetPct: account.phase1TargetPct,
+      phase2TargetPct: account.phase2TargetPct,
+      maxLossPct: account.maxLossPct,
+
+      overallProfitPct,
+      phase2ProfitPct, // null if not in phase2 yet
+      phase1Passed,
+
+      currentTargetPct,
+      targetProgressPct,
+      drawdownUsedPct,
     },
   });
 }
